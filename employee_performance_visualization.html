@@ -1,0 +1,64 @@
+# employee_analysis_to_html.py
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import io, base64
+
+# sample + synthetic generation
+rows = [
+    ("EMP001","Operations","North America",84.2,5,5),
+    ("EMP002","Marketing","Latin America",82.84,10,4.9),
+    ("EMP003","Operations","Africa",67.82,4,3.2),
+    ("EMP004","Finance","Middle East",79.73,8,4.8),
+    ("EMP005","IT","Africa",67.53,15,3.1),
+]
+departments = ["IT","Finance","Operations","Marketing","HR","Sales","Legal","R&D"]
+regions = ["North America","Latin America","Africa","Middle East","Europe","Asia-Pacific"]
+
+for i in range(6, 101):
+    emp = f"EMP{str(i).zfill(3)}"
+    dept = np.random.choice(departments, p=[0.18,0.14,0.2,0.16,0.08,0.14,0.05,0.05])
+    region = np.random.choice(regions)
+    perf = round(np.random.normal(75, 10), 2)
+    years = int(max(0, np.random.poisson(6)))
+    sat = round(max(1, min(5, np.random.normal(4, 0.7))), 1)
+    rows.append((emp, dept, region, perf, years, sat))
+
+df = pd.DataFrame(rows, columns=["employee_id","department","region","performance_score","years_experience","satisfaction_rating"])
+
+# frequency count for IT
+it_count = (df['department'] == "IT").sum()
+print("Frequency count for 'IT' department:", it_count)
+
+# plot
+plt.figure(figsize=(8,5))
+dept_counts = df['department'].value_counts().sort_values(ascending=False)
+dept_counts.plot(kind='bar')
+plt.title("Department Distribution (n=100)")
+plt.xlabel("Department")
+plt.ylabel("Count")
+plt.tight_layout()
+
+# save plot to base64 and create HTML
+buf = io.BytesIO()
+plt.savefig(buf, format='png', dpi=150)
+buf.seek(0)
+img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+buf.close()
+
+html_content = f"""
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Employee Performance Visualization</title></head>
+<body>
+  <h1>Employee Performance Analysis</h1>
+  <p>Frequency count for 'IT' department: <strong>{it_count}</strong></p>
+  <h2>Department Distribution Histogram</h2>
+  <img src="data:image/png;base64,{img_base64}" alt="Department histogram" />
+  <p>Verification email: 23ds1000038@ds.study.iitm.ac.in</p>
+</body>
+</html>
+"""
+with open("employee_performance_visualization.html", "w", encoding="utf-8") as f:
+    f.write(html_content)
+print("Saved employee_performance_visualization.html")
