@@ -1,64 +1,193 @@
-# employee_analysis_to_html.py
+#!/usr/bin/env python3
+"""
+generate_employee_html.py
+
+Usage:
+    python generate_employee_html.py               # uses synthetic dataset (100 rows)
+    python generate_employee_html.py --csv data.csv  # uses your CSV (must have columns matching sample)
+
+Output:
+    - Prints the IT frequency count to console.
+    - Saves 'employee_performance_visualization.html' in the current directory.
+    - The HTML contains:
+        * A literal printed IT count (e.g. "Frequency count for 'IT' department: 12")
+        * The histogram embedded as a base64 PNG
+        * The full Python code (this file) inside a <pre>...</pre> block
+        * Verification email: 23ds1000038@ds.study.iitm.ac.in
+"""
+import argparse
+import io
+import base64
+import sys
+import os
+import textwrap
+import html
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import io, base64
 
-# sample + synthetic generation
-rows = [
+VERIFICATION_EMAIL = "23ds1000038@ds.study.iitm.ac.in"
+OUTPUT_HTML = "employee_performance_visualization.html"
+
+SAMPLE_ROWS = [
     ("EMP001","Operations","North America",84.2,5,5),
     ("EMP002","Marketing","Latin America",82.84,10,4.9),
     ("EMP003","Operations","Africa",67.82,4,3.2),
     ("EMP004","Finance","Middle East",79.73,8,4.8),
     ("EMP005","IT","Africa",67.53,15,3.1),
 ]
-departments = ["IT","Finance","Operations","Marketing","HR","Sales","Legal","R&D"]
-regions = ["North America","Latin America","Africa","Middle East","Europe","Asia-Pacific"]
 
-for i in range(6, 101):
-    emp = f"EMP{str(i).zfill(3)}"
-    dept = np.random.choice(departments, p=[0.18,0.14,0.2,0.16,0.08,0.14,0.05,0.05])
-    region = np.random.choice(regions)
-    perf = round(np.random.normal(75, 10), 2)
-    years = int(max(0, np.random.poisson(6)))
-    sat = round(max(1, min(5, np.random.normal(4, 0.7))), 1)
-    rows.append((emp, dept, region, perf, years, sat))
+DEFAULT_DEPARTMENTS = ["IT","Finance","Operations","Marketing","HR","Sales","Legal","R&D"]
+DEFAULT_REGIONS = ["North America","Latin America","Africa","Middle East","Europe","Asia-Pacific"]
 
-df = pd.DataFrame(rows, columns=["employee_id","department","region","performance_score","years_experience","satisfaction_rating"])
+def generate_synthetic(n_total=100, seed=42):
+    np.random.seed(seed)
+    rows = SAMPLE_ROWS.copy()
+    for i in range(6, n_total+1):
+        emp = f"EMP{str(i).zfill(3)}"
+        # department probabilities chosen so IT is reasonably frequent but variable
+        dept = np.random.choice(DEFAULT_DEPARTMENTS, p=[0.18,0.14,0.2,0.16,0.08,0.14,0.05,0.05])
+        region = np.random.choice(DEFAULT_REGIONS)
+        perf = round(np.random.normal(75, 10), 2)
+        years = int(max(0, np.random.poisson(6)))
+        sat = round(max(1, min(5, np.random.normal(4, 0.7))), 1)
+        rows.append((emp, dept, region, perf, years, sat))
+    df = pd.DataFrame(rows, columns=["employee_id","department","region","performance_score","years_experience","satisfaction_rating"])
+    return df
 
-# frequency count for IT
-it_count = (df['department'] == "IT").sum()
-print("Frequency count for 'IT' department:", it_count)
+def load_csv(path):
+    # Attempt to load CSV with expected columns
+    df = pd.read_csv(path)
+    # Basic validation and possible cleanup
+    required_cols = {"employee_id","department","region","performance_score","years_experience","satisfaction_rating"}
+    if not required_cols.issubset(set(df.columns)):
+        # Try to be forgiving: if columns are present with different names, we won't rename automatically.
+        raise ValueError(f"CSV must contain columns: {', '.join(sorted(required_cols))}. Found: {', '.join(df.columns)}")
+    return df
 
-# plot
-plt.figure(figsize=(8,5))
-dept_counts = df['department'].value_counts().sort_values(ascending=False)
-dept_counts.plot(kind='bar')
-plt.title("Department Distribution (n=100)")
-plt.xlabel("Department")
-plt.ylabel("Count")
-plt.tight_layout()
+def plot_department_distribution(df):
+    plt.figure(figsize=(9,5))
+    dept_counts = df['department'].value_counts().sort_values(ascending=False)
+    bar_container = plt.bar(dept_counts.index, dept_counts.values)
+    plt.title(f"Department Distribution (n={len(df)})")
+    plt.xlabel("Department")
+    plt.ylabel("Count")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150)
+    plt.close()
+    buf.seek(0)
+    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+    buf.close()
+    return img_b64, dept_counts
 
-# save plot to base64 and create HTML
-buf = io.BytesIO()
-plt.savefig(buf, format='png', dpi=150)
-buf.seek(0)
-img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-buf.close()
+def read_own_source():
+    """
+    Try to read this script's source to embed in the HTML.
+    If __file__ isn't available (e.g., interactive), attempt sys.argv[0].
+    """
+    possible_paths = []
+    try:
+        possible_paths.append(__file__)
+    except NameError:
+        pass
+    if len(sys.argv) > 0:
+        possible_paths.append(sys.argv[0])
+    # Remove None and duplicates
+    possible_paths = [p for p in dict.fromkeys(possible_paths) if p]
+    for path in possible_paths:
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception:
+            continue
+    # Fallback: embed an explanatory placeholder
+    return "# Source code not available to embed (script was run interactively)."
 
-html_content = f"""
-<!doctype html>
+def build_html(it_count_literal, img_b64, dept_counts, python_source_text):
+    # Escape the Python source for safe inclusion in HTML <pre>
+    escaped_code = html.escape(python_source_text)
+    # Also create a small table of department counts for readability
+    dept_table_rows = "\n".join(f"<tr><td>{html.escape(str(d))}</td><td>{int(c)}</td></tr>" for d, c in dept_counts.items())
+    html_content = f"""<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Employee Performance Visualization</title></head>
+<head>
+  <meta charset="utf-8">
+  <title>Employee Performance Visualization</title>
+  <style>
+    body {{ font-family: Arial, Helvetica, sans-serif; margin: 24px; }}
+    pre {{ background:#f7f7f7; padding:12px; overflow:auto; border:1px solid #ddd; }}
+    table {{ border-collapse: collapse; margin-top:12px; }}
+    td, th {{ border:1px solid #ccc; padding:6px 10px; }}
+  </style>
+</head>
 <body>
   <h1>Employee Performance Analysis</h1>
-  <p>Frequency count for 'IT' department: <strong>12</strong></p>
+
+  <h2>Computed Output</h2>
+  <p>Frequency count for 'IT' department: <strong>{it_count_literal}</strong></p>
+
+  <h3>Department Distribution (counts)</h3>
+  <table>
+    <thead><tr><th>Department</th><th>Count</th></tr></thead>
+    <tbody>
+{dept_table_rows}
+    </tbody>
+  </table>
+
   <h2>Department Distribution Histogram</h2>
-  <img src="data:image/png;base64,{img_base64}" alt="Department histogram" />
-  <p>Verification email: 23ds1000038@ds.study.iitm.ac.in</p>
+  <img alt="Department histogram" src="data:image/png;base64,{img_b64}" />
+
+  <h2>Python code used to generate this page</h2>
+  <p>The full Python script that generated this HTML is embedded below for verification and grading. It includes the exact logic used to compute the IT frequency above.</p>
+  <pre>{escaped_code}</pre>
+
+  <hr/>
+  <p>Verification email: {html.escape(VERIFICATION_EMAIL)}</p>
 </body>
 </html>
 """
-with open("employee_performance_visualization.html", "w", encoding="utf-8") as f:
-    f.write(html_content)
-print("Saved employee_performance_visualization.html")
+    return html_content
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate employee performance HTML with histogram and embedded code.")
+    parser.add_argument("--csv", type=str, help="Path to employee CSV. If omitted, a synthetic dataset (100 rows) will be used.")
+    parser.add_argument("--output", "-o", type=str, default=OUTPUT_HTML, help="Output HTML filename.")
+    args = parser.parse_args()
+
+    if args.csv:
+        if not os.path.exists(args.csv):
+            print(f"CSV file not found at: {args.csv}\nFalling back to synthetic data.", file=sys.stderr)
+            df = generate_synthetic()
+        else:
+            try:
+                df = load_csv(args.csv)
+            except Exception as e:
+                print(f"Error loading CSV: {e}\nFalling back to synthetic data.", file=sys.stderr)
+                df = generate_synthetic()
+    else:
+        df = generate_synthetic()
+
+    # Calculate IT count and print to console (required)
+    it_count = int((df['department'] == "IT").sum())
+    print(f"Frequency count for 'IT' department: {it_count}")
+
+    # Generate plot image as base64 and get counts for table
+    img_b64, dept_counts = plot_department_distribution(df)
+
+    # Read own source to embed into HTML
+    python_source_text = read_own_source()
+
+    # Build final HTML with literal it_count embedded
+    html_out = build_html(it_count, img_b64, dept_counts, python_source_text)
+
+    # Save HTML
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(html_out)
+    print(f"Saved HTML to: {os.path.abspath(args.output)}")
+    print(f"Include this file in your GitHub repo and use the raw URL (https://raw.githubusercontent.com/...) for grading.")
+    print(f"Verification email included in HTML: {VERIFICATION_EMAIL}")
+
+if __name__ == "__main__":
+    main()
